@@ -3,6 +3,12 @@ HTTP::Async
 This module lets you process several HTTP connections at once, in parallel and
 without blocking.
 
+This module is a fork of HTTP-Async 0.09 by Edmund von der Burg. The main
+reason of this work is to change the client timeout behavior..
+
+The original module is available from CPAN:
+http://search.cpan.org/~evdb/HTTP-Async-0.09
+
 INSTALLATION
 
 To install you can use the following commands:
