@@ -1,0 +1,26 @@
+--- #YAML:1.0
+name:                HTTP-Async
+version:             0.09
+abstract:            ~
+license:             ~
+generated_by:        ExtUtils::MakeMaker version 6.32
+distribution_type:   module
+requires:     
+    Carp:                          0
+    Data::Dumper:                  0
+    HTTP::Request:                 0
+    HTTP::Response:                0
+    HTTP::Server::Simple::CGI:     0
+    HTTP::Status:                  0
+    IO::Select:                    0
+    LWP::UserAgent:                0
+    Net::HTTP:                     0
+    Net::HTTP::NB:                 0
+    Test::HTTP::Server::Simple:    0
+    Test::More:                    0
+    Time::HiRes:                   0
+    URI:                           0
+    URI::Escape:                   0
+meta-spec:
+    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
+    version: 1.2
