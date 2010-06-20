@@ -423,42 +423,54 @@ sub DESTROY {
     return;
 }
 
+# check the single request timeout status and remove from queue if reached
+sub _check_timeout {
+  my $self = shift;
+  while (my ($id, $request) = each(%{$self->{in_progress}})){
+    $self->_remove_handle_by_id($id) if ($request->{timeout_at} < time || $request->{finish_by} < time);
+  }
+}
+
+# remove the request from queue by using the request id
+sub _remove_handle_by_id {
+  my $self = shift;
+  my $id = shift;
+
+  while (my ($fileno, $tmpid) = each(%{$self->{fileno_to_id}})){
+    if (defined($fileno) && $id == $tmpid) {
+      my $hashref = $$self{in_progress}{$id};
+      $self->_add_error_response_to_return(
+          id       => $id,
+          code     => '504',
+          request  => $hashref->{request},
+          previous => $hashref->{previous},
+          content  => 'Timeout',
+      );
+      $self->_io_select->remove($fileno);
+      delete $$self{fileno_to_id}{ $fileno };
+      delete $$self{in_progress}{$id};
+    }
+  }
+}
+
 # Go through all the values on the select list and check to see if
 # they have been fully received yet.
 
 sub _process_in_progress {
     my $self = shift;
 
-  HANDLE:
-    foreach my $s ( $self->_io_select->can_read(0) ) {
+    my @ready = ($self->_io_select->can_read(0));
+    # check timeout and remove timed out objects
+    $self->_check_timeout unless @ready;
 
+HANDLE:
+    foreach my $s (@ready) {
         my $id = $self->{fileno_to_id}{ $s->fileno };
         die unless $id;
         my $hashref = $$self{in_progress}{$id};
         my $tmp     = $hashref->{tmp} ||= {};
 
         # warn Dumper $hashref;
-
-        # Check that we have not timed-out.
-        if (   time > $hashref->{timeout_at}
-            || time > $hashref->{finish_by} )
-        {
-
-            # warn sprintf "Timeout: %.3f > %.3f",    #
-            #   time, $hashref->{timeout_at};
-
-            $self->_add_error_response_to_return(
-                id       => $id,
-                code     => 504,
-                request  => $hashref->{request},
-                previous => $hashref->{previous},
-                content  => 'Timed out',
-            );
-
-            $self->_io_select->remove($s);
-            delete $$self{fileno_to_id}{ $s->fileno };
-            next HANDLE;
-        }
 
         # If there is a code then read the body.
         if ( $$tmp{code} ) {
