@@ -9,7 +9,7 @@ use Carp;
 use Data::Dumper;
 use HTTP::Response;
 use IO::Select;
-use Net::HTTP::NB;
+use HTTP::Async::NBR;
 use Net::HTTP;
 use URI;
 use Time::HiRes qw( time sleep );
@@ -446,7 +446,7 @@ sub _remove_handle_by_id {
           previous => $hashref->{previous},
           content  => 'Timeout',
       );
-      $self->_io_select->remove($fileno);
+      $self->_io_select_rd->remove($fileno);
       delete $$self{fileno_to_id}{ $fileno };
       delete $$self{in_progress}{$id};
     }
@@ -459,11 +459,11 @@ sub _remove_handle_by_id {
 sub _process_in_progress {
     my $self = shift;
 
-    my @ready = ($self->_io_select->can_read(0));
+    my @ready = ($self->_io_select_rd->can_read(0));
     # check timeout and remove timed out objects
     $self->_check_timeout unless @ready;
 
-HANDLE:
+    HANDLE:
     foreach my $s (@ready) {
         my $id = $self->{fileno_to_id}{ $s->fileno };
         die unless $id;
@@ -507,7 +507,7 @@ HANDLE:
                     'request'  => $hashref->{request},
                     'previous' => $hashref->{previous}
                 );
-                $self->_io_select->remove($s);
+                $self->_io_select_rd->remove($s);
                 delete $$self{fileno_to_id}{ $s->fileno };
                 next HANDLE;
             }
@@ -531,7 +531,7 @@ HANDLE:
         # to 'to_return';
         if ( $$tmp{is_complete} ) {
             delete $$self{fileno_to_id}{ $s->fileno };
-            $self->_io_select->remove($s);
+            $self->_io_select_rd->remove($s);
 
             # warn Dumper $$hashref{content};
 
@@ -573,6 +573,60 @@ HANDLE:
             }
 
             delete $hashref->{tmp};
+        }
+    }
+
+  HANDLE:
+    foreach my $s ( $self->_io_select_wr->can_write(0) ) {
+
+        my $id = $self->{fileno_to_id}{ $s->fileno };
+        die unless $id;
+        my $hashref = $$self{in_progress}{$id};
+        my $tmp     = $hashref->{tmp} ||= {};
+
+        # warn Dumper $hashref;
+
+        # Check that we have not timed-out.
+        if (   time > $hashref->{timeout_at}
+            || time > $hashref->{finish_by} )
+        {
+
+            # warn sprintf "Timeout: %.3f > %.3f",    #
+            #   time, $hashref->{timeout_at};
+
+            $self->_add_error_response_to_return(
+                id       => $id,
+                code     => 504,
+                request  => $hashref->{request},
+                previous => $hashref->{previous},
+                content  => $s->connected ? 'Write timed out' :
+                                            'Connect timed out',
+            );
+
+            $self->_io_select_wr->remove($s);
+            delete $$self{fileno_to_id}{ $s->fileno };
+            next HANDLE;
+        }
+
+        my $ok = $s->handle_write;
+
+        if ( !$ok ) {
+
+            $self->_add_error_response_to_return(
+                id       => $id,
+                code     => 503,
+                request  => $hashref->{request},
+                previous => $$self{in_progress}{$id}{previous},
+                content  => 'Write error',
+            );
+
+            $self->_io_select_wr->remove($s);
+            delete $$self{fileno_to_id}{ $s->fileno };
+            next HANDLE;
+        } elsif( $ok == 2 ) {
+
+            # finished writing the buffer
+            $self->_io_select_wr->remove($s);
         }
     }
 
@@ -627,7 +681,9 @@ sub _send_request {
     $args{PeerAddr} ||= $uri->host;
     $args{PeerPort} ||= $uri->port;
 
-    my $s = eval { Net::HTTP::NB->new(%args) };
+    $args{Blocking} = 0;
+
+    my $s = eval { HTTP::Async::NBR->new(%args) };
 
     # We could not create a request - fake up a 503 response with
     # error as content.
@@ -655,7 +711,8 @@ sub _send_request {
       unless $s->write_request( $request->method, $request_uri, %headers,
         $request->content );
 
-    $self->_io_select->add($s);
+    $self->_io_select_rd->add($s);
+    $self->_io_select_wr->add($s);
 
     $$self{fileno_to_id}{ $s->fileno }   = $id;
     $$self{in_progress}{$id}{request}    = $request;
@@ -683,9 +740,14 @@ sub _strip_host_from_uri {
     return $url;
 }
 
-sub _io_select {
+sub _io_select_rd {
     my $self = shift;
-    return $$self{io_select} ||= IO::Select->new();
+    return $$self{io_select_rd} ||= IO::Select->new();
+}
+
+sub _io_select_wr {
+    my $self = shift;
+    return $$self{io_select_wr} ||= IO::Select->new();
 }
 
 sub _make_url_absolute {
